@@ -157,10 +157,10 @@
 											{$publishedArticle->getLocalizedTitle()|escape}
 										</a>
 									</h3>
-								{/if}
-								{if !empty($publishedArticle->getAuthors())}
+								{/if}								
+								{if !empty($publishedArticle->getCurrentPublication()->getData('authors'))}
 									<ul class="list-content__article-authors">
-										{foreach from=$publishedArticle->getAuthors() item="publishedAuthor"}
+										{foreach from=$publishedArticle->getCurrentPublication()->getData('authors') item="publishedAuthor"}
 											<li class="list-content__article-author">
 												<span>{$publishedAuthor->getFullName()}</span>
 											</li>

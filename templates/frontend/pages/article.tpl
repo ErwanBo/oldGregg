@@ -4,20 +4,23 @@
  * Copyright (c) 2018-2019 Vitaliy Bezsheiko
  * Distributed under the GNU GPL v3.
  *}
-
 {extends "frontend/layouts/general.tpl"}
 
+{assign var="publication" value=$article->getCurrentPublication()}
 {assign var="pageTitleTranslated" value=$article->getLocalizedTitle()|escape}
-
-{block name="pageContent"}
+<{block name="pageContent"}
 	<div class="jatsParser__container">
 
 		<div class="jatsParser__meta">
             {* Cover image *}
-            {if $article->getLocalizedCoverImage() || $issue->getLocalizedCoverImage()}
+            {if $publication->getLocalizedData('coverImage') || $issue->getLocalizedCoverImage()}
 				<div class="jatsParser__cover-wrapper">
-                    {if $article->getLocalizedCoverImage()}
-						<img class="jatsParser__cover" src="{$article->getLocalizedCoverImageUrl()|escape}"{if $article->getLocalizedCoverImageAltText()} alt="{$article->getLocalizedCoverImageAltText()|escape}"{/if}>
+                    {if $publication->getLocalizedData('coverImage')}
+						{assign var="coverImage" value=$publication->getLocalizedData('coverImage')}
+						<img class="jatsParser__cover" 
+							src="{$publication->getLocalizedCoverImageUrl($article->getData('contextId'))|escape}" 
+							alt="{$coverImage.altText|escape|default:''}"
+						>
                     {else}
 						<a href="{url page="issue" op="view" path=$issue->getBestIssueId()}">
 							<img class="jatsParser__cover" src="{$issue->getLocalizedCoverImageUrl()|escape}"{if $issue->getLocalizedCoverImageAltText()} alt="{$issue->getLocalizedCoverImageAltText()|escape}"{/if}>
@@ -25,6 +28,7 @@
                     {/if}
 				</div>
             {/if}
+			
 			<div class="jatsParser__meta-row">
 
                 {* Section title *}
@@ -91,10 +95,10 @@
             {/if}
 
             {* Authors' list *}
-            {if $article->getAuthors()}
+            {if $publication->getData('authors')}
 				{assign var="translators" value=[]}
 				<ul class="jatsParser__meta-authors">
-                    {foreach from=$article->getAuthors() item=authorString key=authorStringKey}
+                    {foreach from=$publication->getData('authors') item=authorString key=authorStringKey}
                         {if $authorString->getUserGroupId() === 15}
 							{$translators[$authorStringKey] = $authorString}
 							{continue}
@@ -113,11 +117,10 @@
                         {/strip}
                     {/foreach}
 				</ul>
-
-                {* Authors *}
+				{* Author*}
 				<div class="jatsParser__details-authors">
 					{assign var="translatorsData" value=[]}
-					{foreach from=$article->getAuthors() item=author key=authorKey}
+					{foreach from=$publication->getData('authors') item=author key=authorKey}
 						{if $author->getUserGroupId() === 15}
 							{$translatorsData[$authorKey] = $author}
 							{continue}
@@ -144,7 +147,7 @@
                     {/foreach}
 				</div>
             {/if}
-
+			
 			{* Translators *}
 			{if !empty($translators)}
 				<div class="jatsParser__meta-translators-label">

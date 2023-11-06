@@ -18,6 +18,13 @@ define('OLDGREGG_LATEST_ARTICLES_DEFAULT', 20);
 define('OLDGREGG_ISSUE_COVER_RELATIVE_URL', 'images/issue_default.jpg');
 define('OLDGREGG_LATEST_ISSUES_DEFAULT', 3);
 
+use APP\facades\Repo;
+use APP\submission\Collector;
+use APP\statistics\StatisticsHelper;
+use PKP\db\DBResultRange;
+use PKP\facades\Locale;
+use PKP\db\DAO\Registry;
+
 class OldGreggThemePlugin extends ThemePlugin
 {
 	/**
@@ -132,15 +139,16 @@ class OldGreggThemePlugin extends ThemePlugin
 		$request = $this->getRequest();
 		$journal = $request->getJournal();
 		$journalId = $journal->getId();
-
 		/* retrieve latest articles */
-		$publishedArticleObjects = Services::get("submission")->getMany([
-			'status' => STATUS_PUBLISHED,
-			'contextId' => $journalId,
-			'count' => $latestArticles,
-			'orderBy' => 'datePublished',
-		]);
-
+		$collector = Repo::submission()
+    		->getCollector()
+    		->filterByContextIds([$journalId])
+    		->filterByStatus([Submission::STATUS_PUBLISHED])
+ 	    	->orderBy(Collector::ORDERBY_DATE_PUBLISHED);
+		if($latestArticles !==0){
+			$collector->limit($latestArticles);
+		}
+		$publishedArticleObjects = $collector->getMany();
 		$smarty->assign('publishedArticles', iterator_to_array($publishedArticleObjects));
 	}
 
@@ -178,7 +186,7 @@ class OldGreggThemePlugin extends ThemePlugin
 
 		$smarty->assign([
 			'popularArticles' => $popularArticles,
-			'locale' => AppLocale::getLocale(),
+			'locale' => Locale::getLocale(),
 		]);
 
 	}
@@ -189,69 +197,60 @@ class OldGreggThemePlugin extends ThemePlugin
 	function _toCache($cache) {
 		$request = $this->getRequest();
 		$context = $request->getContext();
-
-		// Find most viewed articles
-		$filter = array(
-			STATISTICS_DIMENSION_ASSOC_TYPE => ASSOC_TYPE_SUBMISSION,
-		);
-		$filter[STATISTICS_DIMENSION_DAY]['from'] = date('Ymd', mktime(0, 0, 0, date("m")-12, date("d"),   date("Y")));
-		$filter[STATISTICS_DIMENSION_DAY]['to'] = date('Ymd');
-		$orderBy = array(STATISTICS_METRIC => STATISTICS_ORDER_DESC);
-		$column = array(
-			STATISTICS_DIMENSION_SUBMISSION_ID,
-		);
-
+		$contextId = $context->getId();
+		
+		// Obtenez les statistiques des articles les plus consultés
 		$latestArticles = $this->getOption("latestArticlesNumber");
 		if (is_null($latestArticles)) {
 			$latestArticles = OLDGREGG_LATEST_ARTICLES_DEFAULT;
 		} else {
 			$latestArticles = intval($latestArticles);
 		}
+		
+		$totals = Services::get('publicationStats')->getTotals([
+			'contextIds' => [$contextId],
+			'count' => $latestArticles,
+			'offset' => 0,
+			'dateStart' => date('Y-m-d', mktime(0, 0, 0, date("m")-12, date("d"), date("Y"))),
+			'dateEnd' => date('Y-m-d')
+		]);
+		
+		// Stockez les informations dans le cache
 
-		$dbrange = new DBResultRange($latestArticles);
-
-		$results = $context->getMetrics(OJS_METRIC_TYPE_COUNTER, $column, $filter, $orderBy, $dbrange);
-
-		// Write into cache
-		$supportedLocales = AppLocale::getSupportedLocales();
-
+		$supportedLocales = Locale::getLocales();
 		$popularArticles = array();
-		foreach ($results as $result) {
-			$publishedArticle = Services::get('submission')->get($result['submission_id']);
-
-			// The submission likely was unpublished, see Vitaliy-1/oldGregg#132
-			if (!$publishedArticle) continue;
-
-			// Can't cache objects
-			$popularArticles[$result['submission_id']] = array(
-				'views' => $result['metric'],
+		
+		foreach ($totals as $total) {
+			$publishedArticle = Repo::submission()->get($total->submission_id);
+			$publication=$publishedArticle->getCurrentPublication();
+			$popularArticles[$total->submission_id] = array(
+				'localized_title' => $publishedArticle->getLocalizedFullTitle(),
+				'views' => $total->metric,
 				'date_published' => $publishedArticle->getDatePublished()
 			);
-
+		
 			$localizedTitle = array();
 			foreach ($supportedLocales as $key => $locale) {
 				$localizedTitle[$key] = $publishedArticle->getFullTitle($key);
 			}
-
-			$popularArticles[$result['submission_id']]['localized_title'] = $localizedTitle;
-
-			if (!empty($publishedArticle->getAuthors())) {
+			$popularArticles[$total->submission_id]['localized_title'] = $localizedTitle;
+		
+			if (!empty($publication->getData('authors'))) {
 				$authorsArray = array();
-				foreach ($publishedArticle->getAuthors() as $author) {
+				foreach ($publication->getData('authors') as $author) {
+					$authorArray = array();
 					foreach ($supportedLocales as $key => $locale) {
 						$authorArray[$key] = array(
 							'family_name' => $author->getFamilyName($key),
-							'given_name' => $author->getGivenName($key),
+							'given_name' => $author->getGivenName($key)
 						);
 					}
-
 					$authorsArray[] = $authorArray;
 				}
-
-				$popularArticles[$result['submission_id']]['authors'] = $authorsArray;
+				$popularArticles[$total->submission_id]['authors'] = $authorsArray;
 			}
 		}
-
+		
 		$cache->setEntireCache($popularArticles);
 	}
 
@@ -320,15 +319,11 @@ class OldGreggThemePlugin extends ThemePlugin
 		$reguest = $this->getRequest();
 		$context = $reguest->getContext();
 
-		$categoryDao = DAORegistry::getDAO('CategoryDAO');
-		$categoriesObject = $categoryDao->getByContextId($context->getId());
-
+		$categories = Repo::category()->getCollector()
+			->filterByPublicationIds([$context->getId()])
+			->getMany()
+			->toArray();
 		$numCategoriesHomepage = intval($this->getOption("numCategoriesHomepage"));
-
-		$categories = array();
-		while ($category = $categoriesObject->next()) {
-			$categories[] = $category;
-		}
 
 		$templateMgr->assign(array(
 			'categories' => $categories,
@@ -347,22 +342,22 @@ class OldGreggThemePlugin extends ThemePlugin
 	public function articleSection($hookName, $args) {
 		$templateMgr = $args[0];
 		$template = $args[1];
-
 		if ($template != "frontend/pages/article.tpl" && $template != "plugins-plugins-generic-jatsParser-generic-jatsParser:articleGalleyView.tpl") return;
-
 		$article = $templateMgr->getTemplateVars('article');
 		$sectionId = $article->getSectionId();
-		$sectionDao = DAORegistry::getDAO("SectionDAO");
-		$section = $sectionDao->getById($sectionId);
+		$section = Repo::section()->get($sectionId, $article->getData('contextId'));
 		$sectionTitle = $section->getLocalizedData('title');
 		$article->setData('title',$sectionTitle);
 
+		// TO REMOVE
+		$methods = get_class_methods($article);
+		$templateMgr->assign('methods', $methods);
+		//
 		$publication = $templateMgr->getTemplateVars('publication');
 		$categoryIds = $publication->getData('categoryIds');
-		$categoryDao = DAORegistry::getDAO('CategoryDAO');
 		$categories = [];
 		foreach ($categoryIds as $categoryId) {
-			$category = $categoryDao->getById($categoryId);
+			$category = Repo::category()->get($categoryId);;
 			$categories[] = $category;
 		}
 
